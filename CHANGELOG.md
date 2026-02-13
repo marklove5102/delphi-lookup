@@ -8,6 +8,10 @@ All notable changes to delphi-lookup will be documented in this file.
 - **Access Violation crash in delphi-lookup**: The `finally` block accessed `SearchResults.Count`
   unconditionally, but `SearchResults` is nil when an exception occurs during the search phase.
   This caused an AV at address 0x10 that also masked the real error message.
+- **"no such column: is_declaration" error on pre-v1.1.0 databases**: The exact search query
+  used `ORDER BY is_declaration DESC` unconditionally, but the column only exists in databases
+  created or migrated since v1.1.0. Now detects column existence at initialization and
+  conditionally includes it in the query.
 
 ## [1.1.0] - 2026-02-10
 
