@@ -2,6 +2,22 @@
 
 All notable changes to delphi-lookup will be documented in this file.
 
+## [1.3.0] - 2026-02-19
+
+### Added
+- **Compact output format (v2)**: New default output showing 2-3 lines per result instead of 20+
+  - Line 1: Full symbol signature with `[Decl]` badge for declarations
+  - Line 2: `→ filename [unit: UnitName] (category, framework)`
+  - Reduces context consumption by 50-80% for AI agent workflows
+  - Previous verbose format available via `--full` flag
+- **`--full` flag**: Restores the previous verbose output with code snippets and full metadata
+- **`signature` field in JSON output**: Each result now includes the extracted symbol signature
+- **`is_declaration` field in JSON output**: Boolean indicating declaration vs implementation
+
+### Fixed
+- **Cache loader missing fields**: `framework`, `is_declaration`, `start_line`, `end_line` were not loaded from cache, causing empty framework badges and missing `[Decl]` markers on cache hits
+- **`ExtractMethodSignature` regex truncation**: Changed from `.*?[;:]` to `[^;]+;` to prevent truncating signatures at `:` in parameter type annotations (e.g., `pSQL:string`)
+
 ## [1.2.0] - 2026-02-18
 
 ### Added
