@@ -18,11 +18,14 @@ type
     function CleanupWhitespace(const AText: string): string;
     function GetResultTypeDescription(AResult: TSearchResult): string;
     function ExtractMethodSignature(const AContent: string): string;
+    function ExtractSignature(AResult: TSearchResult): string;
     function SanitizeForOutput(const AText: string): string;
-    
+    procedure FormatCompactSingleResult(AResult: TSearchResult; AIndex: Integer);
+
   public
     procedure FormatResults(AResults: TSearchResultList; const AQuery: string);
     procedure FormatSingleResult(AResult: TSearchResult; AIndex: Integer);
+    procedure FormatCompactResults(AResults: TSearchResultList; const AQuery: string);
     procedure FormatResultsAsJSON(AResults: TSearchResultList; const AQuery: string;
       ADurationMs: Integer; AIsCacheHit: Boolean);
   end;
@@ -222,8 +225,8 @@ begin
     begin
       Line := Trim(Lines[I]);
       
-      // Match procedure/function/constructor/destructor declarations
-      Match := TRegEx.Match(Line, '\b(procedure|function|constructor|destructor)\s+\w+.*?[;:]', [roIgnoreCase]);
+      // Match procedure/function/constructor/destructor declarations up to first semicolon
+      Match := TRegEx.Match(Line, '\b(procedure|function|constructor|destructor)\s+[^;]+;', [roIgnoreCase]);
       if Match.Success then
       begin
         Result := Match.Value;
@@ -234,6 +237,43 @@ begin
   finally
     Lines.Free;
   end;
+end;
+
+function TResultFormatter.ExtractSignature(AResult: TSearchResult): string;
+var
+  Lines: TStringList;
+  I: Integer;
+  Line: string;
+begin
+  // Extract first non-empty, non-comment line from Content
+  // The indexer structures Content to start with the symbol declaration,
+  // so the first meaningful line is always the signature
+  if Trim(AResult.Content) <> '' then
+  begin
+    Lines := TStringList.Create;
+    try
+      Lines.Text := AResult.Content;
+      for I := 0 to Lines.Count - 1 do
+      begin
+        Line := Trim(Lines[I]);
+        // Skip empty lines and comment-only lines
+        if (Line = '') or Line.StartsWith('//') or Line.StartsWith('{')
+          or Line.StartsWith('(*') then
+          Continue;
+        // Remove trailing inline comments for cleaner output
+        var CommentPos := Pos('//', Line);
+        if CommentPos > 1 then
+          Line := TrimRight(Copy(Line, 1, CommentPos - 1));
+        Result := Line;
+        Exit;
+      end;
+    finally
+      Lines.Free;
+    end;
+  end;
+
+  // Fallback: name + type
+  Result := AResult.Name + ' (' + GetResultTypeDescription(AResult) + ')';
 end;
 
 function TResultFormatter.FormatComments(const AComments: string; AMaxLines: Integer): string;
@@ -450,6 +490,66 @@ begin
   end;
 end;
 
+procedure TResultFormatter.FormatCompactSingleResult(AResult: TSearchResult; AIndex: Integer);
+var
+  Signature, FileName, UnitName, CategoryInfo: string;
+begin
+  // Extract signature
+  Signature := ExtractSignature(AResult);
+
+  // Build declaration badge
+  if AResult.IsDeclaration then
+    Signature := '[Decl] ' + Signature;
+
+  // Line 1: index + signature
+  WriteLn(Format('%d. %s', [AIndex, Signature]));
+
+  // Build location line
+  if AResult.FilePath <> '' then
+  begin
+    FileName := ExtractFileName(AResult.FilePath);
+    UnitName := ChangeFileExt(FileName, '');
+  end
+  else
+  begin
+    FileName := '?';
+    UnitName := '?';
+  end;
+
+  // Build category info
+  CategoryInfo := AResult.SourceCategory;
+  if AResult.Framework <> '' then
+    CategoryInfo := CategoryInfo + ', ' + AResult.Framework;
+
+  // Line 2: → filename [unit: X] (category)
+  WriteLn(Format('   %s %s [unit: %s] (%s)', [#$E2#$86#$92, FileName, UnitName, CategoryInfo]));
+end;
+
+procedure TResultFormatter.FormatCompactResults(AResults: TSearchResultList; const AQuery: string);
+var
+  I: Integer;
+begin
+  if AResults.Count = 0 then
+  begin
+    WriteLn('No results found for this query.');
+    WriteLn;
+    WriteLn('Try: different search terms, class names (e.g., "TRestServer"), or --full for verbose output.');
+    Exit;
+  end;
+
+  WriteLn(Format('Found %d result(s) for "%s":', [AResults.Count, AQuery]));
+  WriteLn;
+
+  for I := 0 to AResults.Count - 1 do
+  begin
+    FormatCompactSingleResult(AResults[I], I + 1);
+
+    // Empty line between results (except after last)
+    if I < AResults.Count - 1 then
+      WriteLn;
+  end;
+end;
+
 procedure TResultFormatter.FormatResults(AResults: TSearchResultList; const AQuery: string);
 var
   I: Integer;
@@ -509,6 +609,7 @@ begin
 
       ResultObj.AddPair('name', R.Name);
       ResultObj.AddPair('type', R.SymbolType);
+      ResultObj.AddPair('signature', ExtractSignature(R));
       ResultObj.AddPair('file', R.FilePath);
 
       // Extract unit name from file path
@@ -521,6 +622,7 @@ begin
       ResultObj.AddPair('line', TJSONNumber.Create(R.StartLine));
       ResultObj.AddPair('category', R.SourceCategory);
       ResultObj.AddPair('framework', R.Framework);
+      ResultObj.AddPair('is_declaration', TJSONBool.Create(R.IsDeclaration));
       ResultObj.AddPair('score', TJSONNumber.Create(R.Score));
       ResultObj.AddPair('match_type', R.MatchType);
 

@@ -66,6 +66,7 @@ var
   CandidateCount: Integer;
   RerankerURL: string;
   OutputJSON: Boolean;
+  OutputFull: Boolean;
 
 function GetDefaultDatabasePath: string;
 begin
@@ -535,6 +536,14 @@ begin
               SearchResult.Visibility := Query.FieldByName('visibility').AsString;
               SearchResult.ContentType := Query.FieldByName('content_type').AsString;
               SearchResult.SourceCategory := Query.FieldByName('source_category').AsString;
+              if Query.FindField('framework') <> nil then
+                SearchResult.Framework := Query.FieldByName('framework').AsString;
+              if Query.FindField('is_declaration') <> nil then
+                SearchResult.IsDeclaration := Query.FieldByName('is_declaration').AsInteger = 1;
+              if Query.FindField('start_line') <> nil then
+                SearchResult.StartLine := Query.FieldByName('start_line').AsInteger;
+              if Query.FindField('end_line') <> nil then
+                SearchResult.EndLine := Query.FieldByName('end_line').AsInteger;
               SearchResult.MatchType := 'cache_hit';
               SearchResult.Score := 1.0;
 
@@ -901,8 +910,9 @@ begin
   if CandidateCount < 10 then CandidateCount := 10;
   if CandidateCount > 200 then CandidateCount := 200;
 
-  // JSON output mode
+  // Output mode
   OutputJSON := PM.HasParameter('json');
+  OutputFull := PM.HasParameter('full');
 
   // Get query text (first positional argument)
   QueryText := GetFirstPositionalArg;
@@ -1152,9 +1162,15 @@ begin
 
       if OutputJSON then
         ResultFormatter.FormatResultsAsJSON(SearchResults, QueryText, SearchDurationMs, IsCacheHit)
-      else
+      else if OutputFull then
       begin
         ResultFormatter.FormatResults(SearchResults, QueryText);
+        WriteLn;
+        WriteLn(Format('// Search completed in %d ms', [SearchDurationMs]));
+      end
+      else
+      begin
+        ResultFormatter.FormatCompactResults(SearchResults, QueryText);
         WriteLn;
         WriteLn(Format('// Search completed in %d ms', [SearchDurationMs]));
       end;
