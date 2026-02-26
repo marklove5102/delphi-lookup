@@ -33,6 +33,7 @@ type
     function BuildFilterClause: string;
     function ApplyPreferenceBoost(AResult: TSearchResult): TSearchResult;
     function PerformExactSearch(const AQuery: string): TSearchResult;
+    function FetchAllExactMatches(const AQuery: string; AMaxResults: Integer): TSearchResultList;
     function PerformFuzzySearch(const AQuery: string; AMaxResults: Integer): TSearchResultList;
     function PerformFullTextSearch(const AQuery: string; AMaxResults: Integer): TSearchResultList;
     function CreateSearchResultFromQuery: TSearchResult;
@@ -408,6 +409,55 @@ begin
   end;
 end;
 
+function TQueryProcessor.FetchAllExactMatches(const AQuery: string; AMaxResults: Integer): TSearchResultList;
+var
+  SearchResult: TSearchResult;
+begin
+  Result := TSearchResultList.Create;
+
+  try
+    // Fetch ALL symbols with this exact name (overloads, decl+impl).
+    // Uses idx_symbols_name_nocase → SEARCH, not SCAN. ~1ms for any count.
+    FQuery.SQL.Text :=
+      'SELECT * FROM symbols ' +
+      'WHERE name = :query COLLATE NOCASE ' +
+      BuildFilterClause +
+      'ORDER BY ' +
+      '  CASE type ' +
+      '    WHEN ''class'' THEN 1 ' +
+      '    WHEN ''interface'' THEN 2 ' +
+      '    WHEN ''function'' THEN 3 ' +
+      '    WHEN ''procedure'' THEN 4 ' +
+      '    ELSE 5 ' +
+      '  END' +
+      IfThen(FHasIsDeclaration, ', is_declaration DESC ') +
+      ', file_path ' +
+      'LIMIT :max_results';
+    FQuery.ParamByName('query').AsString := AQuery;
+    FQuery.ParamByName('max_results').AsInteger := AMaxResults;
+    FQuery.Open;
+
+    while not FQuery.EOF do
+    begin
+      SearchResult := CreateSearchResultFromQuery;
+      SearchResult.IsExactMatch := True;
+      SearchResult.MatchType := 'exact_name';
+      SearchResult.Score := 1.0;
+      Result.Add(SearchResult);
+      FQuery.Next;
+    end;
+
+    FQuery.Close;
+
+  except
+    on E: Exception do
+    begin
+      Result.Free;
+      raise Exception.CreateFmt('FetchAllExactMatches failed: %s', [E.Message]);
+    end;
+  end;
+end;
+
 function TQueryProcessor.PerformFuzzySearch(const AQuery: string; AMaxResults: Integer): TSearchResultList;
 var
   CleanQuery: string;
@@ -604,17 +654,19 @@ begin
     ExactResult := PerformExactSearch(AQuery);
     if Assigned(ExactResult) then
     begin
-      AllResults.Add(ExactResult);
-
-      // Short-circuit: if we found an exact name match, skip fuzzy/FTS searches.
-      // 83% of real queries are single-word Pascal identifiers where the exact
-      // match is the desired result. This saves ~2s of unnecessary scanning.
+      // Short-circuit: if exact name match, fetch ALL symbols with that name
+      // (overloads, declaration+implementation) but skip expensive fuzzy/FTS.
+      // Still ~1ms via NOCASE index. Covers 83% of production queries.
       if ExactResult.IsExactMatch then
       begin
+        ExactResult.Free;
+        AllResults.Free;
+        AllResults := FetchAllExactMatches(SanitizeQuery(AQuery), AMaxResults);
         Result := AllResults;
         AllResults := nil;
         Exit;
       end;
+      AllResults.Add(ExactResult);
     end;
 
     // 2. Fuzzy name search
