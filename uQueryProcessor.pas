@@ -28,6 +28,7 @@ type
     FSymbolTypeFilter: string;
     FFrameworkFilter: string;
     FHasIsDeclaration: Boolean;
+    FFTS5Available: Boolean;
 
     function BuildFilterClause: string;
     function ApplyPreferenceBoost(AResult: TSearchResult): TSearchResult;
@@ -36,6 +37,7 @@ type
     function PerformFullTextSearch(const AQuery: string; AMaxResults: Integer): TSearchResultList;
     function CreateSearchResultFromQuery: TSearchResult;
     function SanitizeQuery(const AQuery: string): string;
+    function SanitizeFTS5Query(const AQuery: string): string;
     function ExtractKeywords(const AQuery: string): TStringList;
     function CalculateTextSimilarity(const AText1, AText2: string): Double;
     
@@ -139,6 +141,17 @@ begin
     end;
     FQuery.Close;
 
+    // Detect if FTS5 table is available and populated
+    FFTS5Available := False;
+    try
+      FQuery.SQL.Text := 'SELECT rowid FROM symbols_fts LIMIT 1';
+      FQuery.Open;
+      FFTS5Available := not FQuery.EOF;
+      FQuery.Close;
+    except
+      // FTS5 not available - will use LIKE fallback
+    end;
+
     FIsInitialized := True;
 
   except
@@ -159,6 +172,26 @@ begin
   // Collapse multiple spaces
   while Pos('  ', Result) > 0 do
     Result := StringReplace(Result, '  ', ' ', [rfReplaceAll]);
+end;
+
+function TQueryProcessor.SanitizeFTS5Query(const AQuery: string): string;
+var
+  Keywords: TStringList;
+  I: Integer;
+begin
+  Keywords := ExtractKeywords(AQuery);
+  try
+    Result := '';
+    for I := 0 to Keywords.Count - 1 do
+    begin
+      if I > 0 then
+        Result := Result + ' ';
+      // Quote each keyword to prevent FTS5 operator interpretation (AND, OR, NOT, NEAR)
+      Result := Result + '"' + Keywords[I] + '"';
+    end;
+  finally
+    Keywords.Free;
+  end;
 end;
 
 function TQueryProcessor.ExtractKeywords(const AQuery: string): TStringList;
@@ -417,20 +450,69 @@ var
   SearchResult: TSearchResult;
   Keywords: TStringList;
   I: Integer;
-  SearchTerm: string;
+  SearchTerm, FTSQuery: string;
+  UsedFTS5: Boolean;
 begin
   Result := TSearchResultList.Create;
-  
+
   if not FIsInitialized then
     raise Exception.Create('QueryProcessor not initialized');
-    
+
   CleanQuery := SanitizeQuery(AQuery);
   Keywords := ExtractKeywords(CleanQuery);
-  
+
   try
-    if Keywords.Count > 0 then
+    if Keywords.Count = 0 then
+      Exit;
+
+    UsedFTS5 := False;
+
+    // Try FTS5 first (much faster for content/comments search on large tables)
+    if FFTS5Available then
     begin
-      // Build LIKE search query
+      FTSQuery := SanitizeFTS5Query(CleanQuery);
+      if FTSQuery <> '' then
+      begin
+        try
+          // FTS5 MATCH searches across name, full_name, content, comments columns
+          // Using subquery to avoid column name ambiguity with BuildFilterClause
+          FQuery.SQL.Text :=
+            'SELECT s.* FROM symbols s ' +
+            'INNER JOIN (' +
+            '  SELECT rowid, rank FROM symbols_fts WHERE symbols_fts MATCH :fts_query' +
+            ') fts ON s.id = fts.rowid ' +
+            'WHERE 1=1 ' +
+            BuildFilterClause +
+            'ORDER BY fts.rank ' +
+            'LIMIT :max_results';
+
+          FQuery.ParamByName('fts_query').AsString := FTSQuery;
+          FQuery.ParamByName('max_results').AsInteger := AMaxResults;
+          FQuery.Open;
+
+          while not FQuery.EOF do
+          begin
+            SearchResult := CreateSearchResultFromQuery;
+            SearchResult.MatchType := 'full_text_fts5';
+            SearchResult.Score := CalculateTextSimilarity(CleanQuery, SearchResult.Comments + ' ' + SearchResult.Content);
+            Result.Add(SearchResult);
+            FQuery.Next;
+          end;
+
+          FQuery.Close;
+          UsedFTS5 := Result.Count > 0;
+        except
+          // FTS5 query failed, fall through to LIKE
+          try FQuery.Close; except end;
+        end;
+      end;
+    end;
+
+    // Fallback: LIKE-based search (when FTS5 unavailable, failed, or returned 0 results)
+    // This catches compound identifiers like "ControlStock" that FTS5 tokenizes
+    // as a single token but LIKE can match as substring
+    if not UsedFTS5 then
+    begin
       SearchTerm := '';
       for I := 0 to Keywords.Count - 1 do
       begin
@@ -439,7 +521,7 @@ begin
         SearchTerm := SearchTerm + Keywords[I];
       end;
       SearchTerm := '%' + SearchTerm + '%';
-      
+
       FQuery.SQL.Text :=
         'SELECT * FROM symbols ' +
         'WHERE (UPPER(content) LIKE UPPER(:search_term) ' +
@@ -453,11 +535,11 @@ begin
         '    ELSE 3 ' +
         '  END ' +
         'LIMIT :max_results';
-      
+
       FQuery.ParamByName('search_term').AsString := SearchTerm;
       FQuery.ParamByName('max_results').AsInteger := AMaxResults;
       FQuery.Open;
-      
+
       while not FQuery.EOF do
       begin
         SearchResult := CreateSearchResultFromQuery;
@@ -466,10 +548,10 @@ begin
         Result.Add(SearchResult);
         FQuery.Next;
       end;
-      
+
       FQuery.Close;
     end;
-    
+
   finally
     Keywords.Free;
   end;
@@ -706,6 +788,8 @@ function TQueryProcessor.FindSymbolReferences(const ASymbolName: string; AMaxRes
 var
   CleanName: string;
   SearchResult: TSearchResult;
+  FTSQuery: string;
+  UsedFTS5: Boolean;
 begin
   Result := TSearchResultList.Create;
 
@@ -717,43 +801,96 @@ begin
     Exit;
 
   try
-    // Search for symbol name in content (as a word, not substring)
-    // Use word boundary pattern: the symbol should be preceded and followed by non-identifier chars
-    FQuery.SQL.Text :=
-      'SELECT * FROM symbols ' +
-      'WHERE (' +
-      '  content LIKE :pattern1 ' +        // word at start
-      '  OR content LIKE :pattern2 ' +     // word in middle
-      '  OR content LIKE :pattern3 ' +     // word at end
-      '  OR name = :name ' +               // definition itself
-      ') ' +
-      BuildFilterClause +
-      'ORDER BY ' +
-      '  CASE WHEN name = :name THEN 0 ELSE 1 END, ' +  // Definition first
-      '  file_path, start_line ' +
-      'LIMIT :max_results';
+    UsedFTS5 := False;
 
-    // Pattern matching for word boundaries (simplified - SQLite LIKE limitations)
-    FQuery.ParamByName('pattern1').AsString := CleanName + ' %';        // starts with word
-    FQuery.ParamByName('pattern2').AsString := '% ' + CleanName + ' %'; // word in middle
-    FQuery.ParamByName('pattern3').AsString := '% ' + CleanName;        // ends with word
-    FQuery.ParamByName('name').AsString := CleanName;
-    FQuery.ParamByName('max_results').AsInteger := AMaxResults;
-    FQuery.Open;
-
-    while not FQuery.EOF do
+    // Try FTS5 first (faster and more accurate word boundary matching than LIKE)
+    // FTS5 tokenizer properly handles Pascal delimiters (.:;,()[] etc.)
+    // while LIKE word-boundary patterns only handle spaces
+    if FFTS5Available then
     begin
-      SearchResult := CreateSearchResultFromQuery;
-      if SameText(SearchResult.Name, CleanName) then
-        SearchResult.MatchType := 'definition'
-      else
-        SearchResult.MatchType := 'reference';
-      SearchResult.Score := 0.8;
-      Result.Add(SearchResult);
-      FQuery.Next;
+      try
+        // Search for symbol name as token in content column
+        // Replace underscores with spaces for proper FTS5 phrase matching
+        // (unicode61 tokenizer splits on underscores)
+        FTSQuery := 'content:"' + StringReplace(CleanName, '_', ' ', [rfReplaceAll]) + '"';
+
+        FQuery.SQL.Text :=
+          'SELECT s.* FROM symbols s ' +
+          'WHERE (' +
+          '  s.id IN (' +
+          '    SELECT rowid FROM symbols_fts WHERE symbols_fts MATCH :fts_query' +
+          '  )' +
+          '  OR s.name = :name' +
+          ') ' +
+          BuildFilterClause +
+          'ORDER BY ' +
+          '  CASE WHEN s.name = :name THEN 0 ELSE 1 END, ' +
+          '  s.file_path, s.start_line ' +
+          'LIMIT :max_results';
+
+        FQuery.ParamByName('fts_query').AsString := FTSQuery;
+        FQuery.ParamByName('name').AsString := CleanName;
+        FQuery.ParamByName('max_results').AsInteger := AMaxResults;
+        FQuery.Open;
+
+        while not FQuery.EOF do
+        begin
+          SearchResult := CreateSearchResultFromQuery;
+          if SameText(SearchResult.Name, CleanName) then
+            SearchResult.MatchType := 'definition'
+          else
+            SearchResult.MatchType := 'reference';
+          SearchResult.Score := 0.8;
+          Result.Add(SearchResult);
+          FQuery.Next;
+        end;
+
+        FQuery.Close;
+        UsedFTS5 := True;
+      except
+        // FTS5 query failed, fall through to LIKE
+        try FQuery.Close; except end;
+      end;
     end;
 
-    FQuery.Close;
+    // Fallback: LIKE-based search with space-based word boundary patterns
+    if not UsedFTS5 then
+    begin
+      FQuery.SQL.Text :=
+        'SELECT * FROM symbols ' +
+        'WHERE (' +
+        '  content LIKE :pattern1 ' +        // word at start
+        '  OR content LIKE :pattern2 ' +     // word in middle
+        '  OR content LIKE :pattern3 ' +     // word at end
+        '  OR name = :name ' +               // definition itself
+        ') ' +
+        BuildFilterClause +
+        'ORDER BY ' +
+        '  CASE WHEN name = :name THEN 0 ELSE 1 END, ' +
+        '  file_path, start_line ' +
+        'LIMIT :max_results';
+
+      FQuery.ParamByName('pattern1').AsString := CleanName + ' %';
+      FQuery.ParamByName('pattern2').AsString := '% ' + CleanName + ' %';
+      FQuery.ParamByName('pattern3').AsString := '% ' + CleanName;
+      FQuery.ParamByName('name').AsString := CleanName;
+      FQuery.ParamByName('max_results').AsInteger := AMaxResults;
+      FQuery.Open;
+
+      while not FQuery.EOF do
+      begin
+        SearchResult := CreateSearchResultFromQuery;
+        if SameText(SearchResult.Name, CleanName) then
+          SearchResult.MatchType := 'definition'
+        else
+          SearchResult.MatchType := 'reference';
+        SearchResult.Score := 0.8;
+        Result.Add(SearchResult);
+        FQuery.Next;
+      end;
+
+      FQuery.Close;
+    end;
 
   except
     on E: Exception do
