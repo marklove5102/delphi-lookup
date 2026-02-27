@@ -229,8 +229,17 @@ begin
 
   if FileExists(FDatabaseFile) then
   begin
-    FQueryProcessor := TQueryProcessor.Create;
-    FQueryProcessor.Initialize(FDatabaseFile);
+    try
+      FQueryProcessor := TQueryProcessor.Create;
+      FQueryProcessor.Initialize(FDatabaseFile, True);
+    except
+      on E: Exception do
+      begin
+        FreeAndNil(FQueryProcessor);
+        // Log error to stderr but continue - server will have limited functionality
+        WriteLn(ErrOutput, 'Warning: Database initialization failed: ' + E.Message);
+      end;
+    end;
   end;
 
   // Build capabilities response

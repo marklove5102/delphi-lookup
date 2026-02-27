@@ -46,7 +46,7 @@ type
     constructor Create;
     destructor Destroy; override;
     
-    procedure Initialize(const ADatabaseFile: string);
+    procedure Initialize(const ADatabaseFile: string; AReadOnly: Boolean = False);
     function PerformHybridSearch(const AQuery: string; AMaxResults: Integer;
       AVectorSearch: TObject; AMaxDistance: Double = 0.3): TSearchResultList;
     function PerformHybridSearchWithReranking(const AQuery: string; AMaxResults: Integer;
@@ -116,16 +116,27 @@ begin
   inherited Destroy;
 end;
 
-procedure TQueryProcessor.Initialize(const ADatabaseFile: string);
+procedure TQueryProcessor.Initialize(const ADatabaseFile: string; AReadOnly: Boolean = False);
 begin
   try
     // Enable extensions for vec0 support (used by VectorSearch)
-    TDatabaseConnectionHelper.ConfigureConnection(FConnection, ADatabaseFile, True);
+    TDatabaseConnectionHelper.ConfigureConnection(FConnection, ADatabaseFile, not AReadOnly);
+
     FConnection.Open;
 
-    // Enable WAL mode for concurrent access
-    FQuery.SQL.Text := 'PRAGMA journal_mode=WAL';
-    FQuery.ExecSQL;
+    if AReadOnly then
+    begin
+      // Use PRAGMA query_only instead of OpenMode=ReadOnly
+      // (ReadOnly + WAL causes "disk I/O error" when -shm/-wal files exist)
+      FQuery.SQL.Text := 'PRAGMA query_only = ON';
+      FQuery.ExecSQL;
+    end
+    else
+    begin
+      // Enable WAL mode for concurrent access
+      FQuery.SQL.Text := 'PRAGMA journal_mode=WAL';
+      FQuery.ExecSQL;
+    end;
 
     // Detect if is_declaration column exists (added in v1.1.0)
     FQuery.SQL.Text := 'PRAGMA table_info(symbols)';
