@@ -32,6 +32,8 @@ LSP documentSymbol  →  Get a structured outline of any .pas file
 LSP findReferences  →  Find all files that reference a symbol
 ```
 
+**Note:** `workspaceSymbol` is not functional — Claude Code sends an empty query string ([#17149](https://github.com/anthropics/claude-code/issues/17149)). Use `delphi-lookup.exe` for workspace-wide symbol search.
+
 **Setup:** Install the plugin and point it to your indexed database. See **[claude-code/SETUP.md](claude-code/SETUP.md)** for step-by-step instructions (Windows and WSL).
 
 ## Quick Start
