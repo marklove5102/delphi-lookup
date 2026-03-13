@@ -173,14 +173,35 @@ type
 function SymbolTypeToLSPKind(const AType: string): TLSPSymbolKind;
 
 /// <summary>
-/// Convert a Windows file path to a file:// URI.
+/// Convert a file path to a file:// URI.
+/// Returns WSL-format URI if the client session uses WSL paths.
 /// </summary>
 function FilePathToURI(const APath: string): string;
 
 /// <summary>
-/// Convert a file:// URI back to a Windows file path.
+/// Convert a file:// URI back to a file path.
+/// Detects WSL vs Windows format on first call and converts WSL paths
+/// to Windows internally for database/file operations.
 /// </summary>
 function URIToFilePath(const AURI: string): string;
+
+/// <summary>
+/// Convert a WSL path to a Windows path.
+/// /mnt/w/Foo/Bar.pas -> W:\Foo\Bar.pas
+/// </summary>
+function WSLToWindowsPath(const APath: string): string;
+
+/// <summary>
+/// Convert a Windows path to a WSL path.
+/// W:\Foo\Bar.pas -> /mnt/w/Foo/Bar.pas
+/// </summary>
+function WindowsToWSLPath(const APath: string): string;
+
+var
+  /// True if the client sends WSL-format paths (file:///mnt/...).
+  /// Detected once from the first URI received (typically rootUri in initialize).
+  GClientUsesWSLPaths: Boolean;
+  GPathFormatDetected: Boolean;
 
 implementation
 
@@ -284,37 +305,104 @@ begin
     Result := skVariable;  // Default fallback
 end;
 
+function WSLToWindowsPath(const APath: string): string;
+var
+  DriveLetter: Char;
+  Rest: string;
+begin
+  // /mnt/w/Foo/Bar.pas -> W:\Foo\Bar.pas
+  Result := APath;
+  if APath.StartsWith('/mnt/') and (Length(APath) >= 6) then
+  begin
+    DriveLetter := UpCase(APath[6]);
+    if (Length(APath) > 6) and (APath[7] = '/') then
+      Rest := Copy(APath, 7, MaxInt)
+    else
+      Rest := '';
+    Rest := StringReplace(Rest, '/', '\', [rfReplaceAll]);
+    Result := DriveLetter + ':' + Rest;
+  end;
+end;
+
+function WindowsToWSLPath(const APath: string): string;
+var
+  DriveLetter: Char;
+  Rest: string;
+begin
+  // W:\Foo\Bar.pas -> /mnt/w/Foo/Bar.pas
+  Result := APath;
+  if (Length(APath) >= 2) and (APath[2] = ':') and CharInSet(UpCase(APath[1]), ['A'..'Z']) then
+  begin
+    DriveLetter := LowerCase(APath[1])[1];
+    Rest := Copy(APath, 3, MaxInt);
+    Rest := StringReplace(Rest, '\', '/', [rfReplaceAll]);
+    Result := '/mnt/' + DriveLetter + Rest;
+  end;
+end;
+
 function FilePathToURI(const APath: string): string;
 var
   Encoded: string;
 begin
-  // Convert Windows path to file:// URI
-  // C:\Foo\Bar.pas -> file:///C:/Foo/Bar.pas
-  Encoded := StringReplace(APath, '\', '/', [rfReplaceAll]);
-
-  // URL-encode special characters (but not / or :)
-  Encoded := TNetEncoding.URL.Encode(Encoded);
-  Encoded := StringReplace(Encoded, '%2F', '/', [rfReplaceAll]);
-  Encoded := StringReplace(Encoded, '%3A', ':', [rfReplaceAll]);
-
-  Result := 'file:///' + Encoded;
+  if GClientUsesWSLPaths then
+  begin
+    // Convert Windows path to WSL URI: W:\Foo\Bar.pas -> file:///mnt/w/Foo/Bar.pas
+    Encoded := WindowsToWSLPath(APath);
+    Encoded := TNetEncoding.URL.Encode(Encoded);
+    Encoded := StringReplace(Encoded, '%2F', '/', [rfReplaceAll]);
+    // file:// + /mnt/w/... = file:///mnt/w/...
+    Result := 'file://' + Encoded;
+  end
+  else
+  begin
+    // Windows URI: W:\Foo\Bar.pas -> file:///W:/Foo/Bar.pas
+    Encoded := StringReplace(APath, '\', '/', [rfReplaceAll]);
+    Encoded := TNetEncoding.URL.Encode(Encoded);
+    Encoded := StringReplace(Encoded, '%2F', '/', [rfReplaceAll]);
+    Encoded := StringReplace(Encoded, '%3A', ':', [rfReplaceAll]);
+    Result := 'file:///' + Encoded;
+  end;
 end;
 
 function URIToFilePath(const AURI: string): string;
 begin
   Result := AURI;
 
-  // Remove file:/// prefix
-  if Result.StartsWith('file:///', True) then
-    Result := Copy(Result, 9, MaxInt)
-  else if Result.StartsWith('file://', True) then
-    Result := Copy(Result, 8, MaxInt);
+  // Remove file:// prefix, preserving the path's leading slash.
+  // file:///mnt/w/...   -> /mnt/w/...   (WSL: authority empty, path = /mnt/...)
+  // file:///W:/...      -> W:/...        (Windows: authority empty, path = /W:/...)
+  if Result.StartsWith('file://', True) then
+  begin
+    Result := Copy(Result, 8, MaxInt);  // strip "file://"
+    // Result now starts with "/" + path.
+    // For Windows paths like /W:/ strip the leading slash; for WSL /mnt/ keep it.
+    if (Length(Result) >= 3) and (Result[2] <> '/') and (Result[1] = '/') then
+    begin
+      // Looks like /W:/... or /C:/... -> strip leading /
+      if (Length(Result) >= 4) and (Result[3] = ':') then
+        Result := Copy(Result, 2, MaxInt);
+    end;
+  end;
 
   // URL-decode
   Result := TNetEncoding.URL.Decode(Result);
 
-  // Convert forward slashes to backslashes for Windows
-  Result := StringReplace(Result, '/', '\', [rfReplaceAll]);
+  // Detect client path format from first URI
+  if not GPathFormatDetected then
+  begin
+    GClientUsesWSLPaths := Result.StartsWith('/mnt/');
+    GPathFormatDetected := True;
+  end;
+
+  // Convert to Windows path for internal use (DB queries, file I/O)
+  if Result.StartsWith('/mnt/') then
+    Result := WSLToWindowsPath(Result)
+  else
+    Result := StringReplace(Result, '/', '\', [rfReplaceAll]);
 end;
+
+initialization
+  GClientUsesWSLPaths := False;
+  GPathFormatDetected := False;
 
 end.

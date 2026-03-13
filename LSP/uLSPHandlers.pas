@@ -536,10 +536,17 @@ begin
   if not Assigned(FQueryProcessor) then
     Exit;
 
-  // Extract query
+  // Extract query from standard LSP param
   Query := AParams.GetValue<string>('query', '');
   if Query = '' then
-    Exit;
+    // Claude Code (as of 2026-03) sends {"query":""} for workspace/symbol.
+    // Instead of returning empty results silently, raise an error with guidance
+    // so the AI agent knows how to achieve the same result.
+    raise Exception.Create(
+      'workspaceSymbol requires a query but received empty string. ' +
+      'To search for a Pascal symbol by name, use: ' +
+      'delphi-lookup.exe "SymbolName" -n 5 ' +
+      '(or use goToDefinition/hover on a known position instead)');
 
   // Perform hybrid search (reuses existing functionality!)
   Results := FQueryProcessor.PerformHybridSearch(Query, 50, nil, 0.3);

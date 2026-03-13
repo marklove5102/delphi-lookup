@@ -56,12 +56,14 @@ delphi-indexer.exe --list-folders
 ```
 Pascal Source Files → delphi-indexer → SQLite Database (FTS5)
                                                  ↓
-                                          delphi-lookup → Results
+                                    ┌─── delphi-lookup ──→ CLI Results
+                                    └─── delphi-lsp-server ──→ Claude Code LSP
 ```
 
 **Components:**
 - **delphi-indexer** - Indexes Pascal code with AST parsing (parallel, incremental)
 - **delphi-lookup** - Fast identifier lookup with short-circuit + hybrid search (fuzzy + FTS5) with caching
+- **delphi-lsp-server** - Language Server Protocol server for Claude Code (definition, hover, references, symbols)
 - **Database** - SQLite with WAL mode, FTS5 full-text search, optional vector embeddings
 
 ## System Requirements
@@ -170,16 +172,20 @@ See CLAUDE.md for full configuration reference.
 
 ### Claude Code
 
-delphi-lookup includes a skill for [Claude Code](https://claude.ai/code) that teaches it to use delphi-lookup automatically for Pascal symbol searches.
+delphi-lookup integrates with [Claude Code](https://claude.ai/code) in two ways:
 
-**Quick setup** - paste this to Claude Code:
+1. **LSP Plugin** — Native tool integration (go-to-definition, hover, document symbols, find-references) that works automatically when editing `.pas` files
+2. **Skill** — Teaches Claude Code to use `delphi-lookup.exe` for symbol searches instead of Grep
 
-```
-Install the delphi-lookup skill: copy claude-code/skill.md to ~/.claude/skills/delphi-lookup/
-and add the memory instructions from claude-code/SETUP.md to my CLAUDE.md
-```
+| Feature | LSP Plugin | Skill (delphi-lookup.exe) |
+|---------|-----------|--------------------------|
+| Go to definition | `goToDefinition` | `delphi-lookup.exe "Symbol"` |
+| Symbol documentation | `hover` | `delphi-lookup.exe "Symbol" --full` |
+| File symbol outline | `documentSymbol` | — |
+| Workspace search | — (see [known issues](claude-code/SETUP.md#known-issues)) | `delphi-lookup.exe "query"` |
+| Cross-references | `findReferences` | Grep (more reliable) |
 
-See **[claude-code/SETUP.md](claude-code/SETUP.md)** for detailed instructions.
+See **[claude-code/SETUP.md](claude-code/SETUP.md)** for installation (Windows and WSL).
 
 ### Gemini CLI
 
@@ -213,6 +219,6 @@ Third-party licenses are documented in [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LIC
 
 ---
 
-**Version**: 1.4.0 (2026-02-26)
+**Version**: 1.5.0 (2026-03-13)
 **Target**: AI Coding Agents (Claude Code, Cursor, etc.)
 **Platform**: Windows x64

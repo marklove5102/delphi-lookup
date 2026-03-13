@@ -1,0 +1,20 @@
+{
+  "name": "delphi-lsp-marketplace",
+  "owner": {
+    "name": "delphi-lookup"
+  },
+  "metadata": {
+    "description": "Delphi/Pascal LSP server using delphi-lookup index"
+  },
+  "plugins": [
+    {
+      "name": "delphi-lsp",
+      "source": "./plugins/delphi-lsp",
+      "description": "Delphi/Pascal language server for go-to-definition, find-references, hover, and document symbols",
+      "version": "1.1.0",
+      "author": {
+        "name": "delphi-lookup"
+      }
+    }
+  ]
+}

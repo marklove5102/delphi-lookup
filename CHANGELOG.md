@@ -2,6 +2,32 @@
 
 All notable changes to delphi-lookup will be documented in this file.
 
+## [1.5.0] - 2026-03-13
+
+### Added
+- **LSP Server** (`delphi-lsp-server.exe`): Language Server Protocol server for Claude Code
+  integration, providing native IDE-like features on `.pas` files:
+  - `textDocument/definition` — Go to symbol definition using the indexed database
+  - `textDocument/references` — Find all references to a symbol (FTS5 search on content)
+  - `textDocument/hover` — Formatted markdown preview of class/function declarations with comments
+  - `textDocument/documentSymbol` — Structured symbol outline of a file (classes, methods, properties)
+  - `workspace/symbol` — Hybrid search by name (standard LSP clients; see Known Issues for Claude Code)
+  - Read-only database mode (`PRAGMA query_only`) for concurrent sessions
+  - WSL path auto-detection and bidirectional conversion (`/mnt/w/` ↔ `W:\`)
+  - Win64 only (sqlite-vec compatibility)
+
+- **Claude Code LSP Plugin**: Installable plugin with automated setup scripts
+  - `install-lsp-plugin.bat` for Windows native
+  - `install-lsp-plugin.sh` for WSL/Linux
+  - Plugin template files with configurable paths
+  - See `claude-code/SETUP.md` for installation instructions
+
+### Known Issues
+- **`workspace/symbol` in Claude Code**: Claude Code sends `{"query":""}` instead of
+  extracting the identifier from the cursor position ([#17149](https://github.com/anthropics/claude-code/issues/17149)).
+  The server returns an error message guiding the user to `delphi-lookup.exe` as a workaround.
+  This is a Claude Code client limitation, not a server bug.
+
 ## [1.4.0] - 2026-02-26
 
 ### Changed
