@@ -4,11 +4,14 @@
 [![Platform: Windows x64](https://img.shields.io/badge/Platform-Windows%20x64-blue.svg)]()
 [![Delphi: 12+](https://img.shields.io/badge/Delphi-12%2B-red.svg)]()
 
-High-performance source code search system for Pascal codebases, optimized for AI coding agents like Claude Code.
+High-performance source code search and navigation system for Pascal codebases, designed for AI coding agents like Claude Code.
+
+Includes an **LSP server** that gives Claude Code native go-to-definition, hover, find-references, and document-symbols on `.pas` files — the same navigation experience you get in an IDE, but for AI agents.
 
 ## Features
 
-- **Fast** - ~75ms end-to-end for identifier lookups (short-circuit on exact match), ~75ms cached
+- **LSP Server** - Native Claude Code integration: go-to-definition, hover, references, document symbols on `.pas` files
+- **Fast CLI Search** - ~75ms end-to-end for identifier lookups (short-circuit on exact match), ~75ms cached
 - **Smart Search** - 3-phase cascade: exact NOCASE → prefix → substring, then FTS5 + fuzzy
 - **Declaration Priority** - Declarations rank above implementations with `[Decl]` badges
 - **Smart Caching** - Content-hash based cache that survives reindexing
@@ -17,6 +20,19 @@ High-performance source code search system for Pascal codebases, optimized for A
 - **Category Filtering** - Separate user code, stdlib, third-party
 - **Framework Detection** - Multi-tier VCL/FMX/RTL classification (packages, uses clause, path)
 - **Scalable** - Tested with 672K+ symbols (3.2GB database)
+
+## Claude Code LSP Server
+
+The LSP server gives Claude Code **native IDE-like navigation** on Pascal files — no prompts or skills needed, it just works as a tool:
+
+```
+LSP goToDefinition  →  Jump to where TMyClass is defined
+LSP hover           →  See the full class declaration with docs
+LSP documentSymbol  →  Get a structured outline of any .pas file
+LSP findReferences  →  Find all files that reference a symbol
+```
+
+**Setup:** Install the plugin and point it to your indexed database. See **[claude-code/SETUP.md](claude-code/SETUP.md)** for step-by-step instructions (Windows and WSL).
 
 ## Quick Start
 
@@ -170,28 +186,8 @@ See CLAUDE.md for full configuration reference.
 
 ## AI Tool Integration
 
-### Claude Code
-
-delphi-lookup integrates with [Claude Code](https://claude.ai/code) in two ways:
-
-1. **LSP Plugin** — Native tool integration (go-to-definition, hover, document symbols, find-references) that works automatically when editing `.pas` files
-2. **Skill** — Teaches Claude Code to use `delphi-lookup.exe` for symbol searches instead of Grep
-
-| Feature | LSP Plugin | Skill (delphi-lookup.exe) |
-|---------|-----------|--------------------------|
-| Go to definition | `goToDefinition` | `delphi-lookup.exe "Symbol"` |
-| Symbol documentation | `hover` | `delphi-lookup.exe "Symbol" --full` |
-| File symbol outline | `documentSymbol` | — |
-| Workspace search | — (see [known issues](claude-code/SETUP.md#known-issues)) | `delphi-lookup.exe "query"` |
-| Cross-references | `findReferences` | Grep (more reliable) |
-
-See **[claude-code/SETUP.md](claude-code/SETUP.md)** for installation (Windows and WSL).
-
-### Gemini CLI
-
-Setup guide for [Gemini CLI](https://github.com/google-gemini/gemini-cli) users with a one-shot configuration prompt.
-
-See **[gemini/GEMINI_SETUP.md](gemini/GEMINI_SETUP.md)** for instructions.
+- **Claude Code** — LSP plugin + skill. See **[claude-code/SETUP.md](claude-code/SETUP.md)**
+- **Gemini CLI** — One-shot configuration prompt. See **[gemini/GEMINI_SETUP.md](gemini/GEMINI_SETUP.md)**
 
 ## Contributing
 
