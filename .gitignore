@@ -90,6 +90,30 @@ delphi-lookup.json
 
 # Internal planning documents
 PLAN-*.md
+SPEC-*.md
+HANDOFF-*.md
+PROMPT-*.md
+*-CC.md
+*VALUE-ASSESSMENT*
+
+# Compressed archives
+*.7z
+*.zip
+*.rar
+
+# Temporary folders
+check/
+
+# Orphan/duplicate .res files (underscore variants, test artifacts)
+delphi_indexer.res
+delphi_lookup.res
+delphi_lsp_server.res
+TestAST.res
+CheckFTS5Index.res
+
+# Additional build output
+Debug/
+Release/
 
 # Group project local settings
 *.groupproj.local
